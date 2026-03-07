@@ -1,0 +1,13 @@
+# Mock 数据目录
+
+此目录用于存储所有 Mock 静态数据文件。
+
+## 目录结构
+
+- `user.js` - 用户相关数据
+- `menu.js` - 菜单路由数据
+- `system.js` - 系统管理数据
+- `huji.js` - 户籍管理数据
+- `dashboard.js` - 仪表盘数据
+- `dict.js` - 字典数据
+- `index.js` - 统一导出文件
