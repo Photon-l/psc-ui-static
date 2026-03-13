@@ -63,7 +63,7 @@
     </el-form>
     <!--  底部  -->
     <div class="el-login-footer">
-      <span>Copyright © 2018-2025 ruoyi.vip All Rights Reserved.</span>
+      <span>Copyright 2018-2025 All Rights Reserved.</span>
     </div>
   </div>
 </template>
@@ -156,7 +156,7 @@ export default {
           this.$store.commit('SET_ROLES', ['admin'])
           this.$store.commit('SET_PERMISSIONS', ['*:*:*'])
           this.$store.commit('SET_NAME', 'admin')
-          this.$store.commit('SET_ID', 1)
+          this.$store.commit('SET_ID', '300315773374596921')
           
           // 跳转到首页
           setTimeout(() => {

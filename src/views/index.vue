@@ -61,44 +61,46 @@
       </el-row>
     </div>
 
-    <!-- 隐形水印&#x6821;&#x9A8C; -->
+        <!-- &#x9690;&#x5F62;&#x6C34;&#x5370;&#x6821;&#x9A8C; -->
     <div class="content-card watermark-check">
       <div class="card-header">
         <h3>
           <i class="el-icon-lock"></i>
-          隐形水印&#x6821;&#x9A8C;
+          &#x9690;&#x5F62;&#x6C34;&#x5370;&#x6821;&#x9A8C;
         </h3>
         <div class="card-actions">
-          <el-button
-            type="primary"
-            size="small"
-            :loading="watermarkCheck.loading"
-            @click="runWatermarkCheck"
+          <el-upload
+            :show-file-list="false"
+            :http-request="handleWatermarkCheck"
+            accept="image/*"
           >
-            &#x6821;&#x9A8C;
-          </el-button>
+            <el-button type="primary" size="small" :loading="watermarkCheck.loading">
+              &#x9009;&#x62E9;&#x56FE;&#x7247;&#x6821;&#x9A8C;
+            </el-button>
+          </el-upload>
         </div>
       </div>
       <div class="watermark-body">
         <div class="watermark-row">
-          <span class="label">&#x5F53;&#x524D;&#x7528;&#x6237;ID</span>
-          <span class="value">{{ watermarkCheck.expected || '-' }}</span>
+          <span class="label">&#x6587;&#x4EF6;</span>
+          <span class="value">{{ watermarkCheck.fileName || '-' }}</span>
         </div>
         <div class="watermark-row">
           <span class="label">&#x89E3;&#x7801;&#x6C34;&#x5370;</span>
           <span class="value">{{ watermarkCheck.decoded || '-' }}</span>
         </div>
         <div class="watermark-row">
-          <span class="label">CDR</span>
-          <span class="value">{{ watermarkCheck.cdr }}</span>
-        </div>
-        <div class="watermark-row">
-          <span class="label">NC</span>
-          <span class="value">{{ watermarkCheck.nc }}</span>
-        </div>
-        <div class="watermark-row">
           <span class="label">&#x72B6;&#x6001;</span>
           <el-tag :type="watermarkCheck.statusType">{{ watermarkCheck.statusText }}</el-tag>
+        </div>
+      </div>
+      <div class="watermark-rank">
+        <div class="rank-header">&#x5019;&#x9009;ID Top {{ watermarkCheck.top.length }}</div>
+        <div v-if="!watermarkCheck.top.length" class="rank-empty">-</div>
+        <div v-for="(item, idx) in watermarkCheck.top" :key="item.id || idx" class="rank-row">
+          <span class="rank-id">{{ item.id }}</span>
+          <span class="rank-metric">CDR {{ item.cdr }}</span>
+          <span class="rank-metric">NC {{ item.nc }}</span>
         </div>
       </div>
     </div>
@@ -436,13 +438,22 @@ export default {
         }
       ],
       watermarkCheck: {
+        fileName: "",
+        decoded: "",
+        top: [],
+        statusText: "\u672A\u6821\u9A8C",
+        statusType: "info",
+        loading: false
+      },
+      watermarkExtract: {
         expected: "",
         decoded: "",
         cdr: "-",
         nc: "-",
-        statusText: "\u672A\u6821\u9A8C",
+        statusText: "\u672A\u89E3\u6790",
         statusType: "info",
-        loading: false
+        loading: false,
+        fileName: ""
       },
       loading: false
     }
@@ -489,33 +500,42 @@ export default {
       }
       const cached = localStorage.getItem("wm_uid")
       if (cached) return cached
-      const randomId = Array.from({ length: 18 }, () => Math.floor(Math.random() * 10)).join("")
-      localStorage.setItem("wm_uid", randomId)
-      return randomId
+      const defaultId = "300315773374596921"
+      localStorage.setItem("wm_uid", defaultId)
+      return defaultId
     },
-    async runWatermarkCheck() {
+    async handleWatermarkCheck({ file }) {
       this.watermarkCheck.loading = true
-      const expected = this.getOrCreateUserId()
-      this.watermarkCheck.expected = expected
+      this.watermarkCheck.fileName = file && file.name ? file.name : ""
+      this.watermarkCheck.decoded = ""
+      this.watermarkCheck.top = []
       const baseUrl = process.env.VUE_APP_WATERMARK_API || "http://127.0.0.1:5001"
-      const url = `${baseUrl}/verify?text=${encodeURIComponent(expected)}`
+      const url = `${baseUrl}/verify`
       try {
-        const response = await fetch(url, { cache: "no-store" })
+        const formData = new FormData()
+        formData.append("image", file)
+        const response = await fetch(url, {
+          method: "POST",
+          body: formData
+        })
         if (!response.ok) {
           throw new Error(`status=${response.status}`)
         }
         const data = await response.json()
         this.watermarkCheck.decoded = data.decoded || ""
-        const cdr = Number(data.cdr)
-        const nc = Number(data.nc)
-        this.watermarkCheck.cdr = Number.isFinite(cdr) ? cdr.toFixed(4) : "-"
-        this.watermarkCheck.nc = Number.isFinite(nc) ? nc.toFixed(4) : "-"
-        if (data.decoded === expected) {
+        if (Array.isArray(data.top)) {
+          this.watermarkCheck.top = data.top.map(item => ({
+            id: item.id,
+            cdr: Number(item.cdr).toFixed(4),
+            nc: Number(item.nc).toFixed(4)
+          }))
+        }
+        if (this.watermarkCheck.top.length > 0) {
           this.watermarkCheck.statusType = "success"
-          this.watermarkCheck.statusText = "\u6821\u9A8C\u901A\u8FC7"
+          this.watermarkCheck.statusText = "\u6821\u9A8C\u5B8C\u6210"
         } else {
           this.watermarkCheck.statusType = "warning"
-          this.watermarkCheck.statusText = "\u5339\u914D\u4E0D\u4E00\u81F4"
+          this.watermarkCheck.statusText = "\u65E0\u5339\u914D"
         }
       } catch (error) {
         console.error("[Watermark] verify failed:", error)
@@ -523,6 +543,45 @@ export default {
         this.watermarkCheck.statusText = "\u6821\u9A8C\u5931\u8D25"
       } finally {
         this.watermarkCheck.loading = false
+      }
+    },
+    async handleWatermarkExtract({ file }) {
+      this.watermarkExtract.loading = true
+      this.watermarkExtract.fileName = file && file.name ? file.name : ""
+      const expected = this.getOrCreateUserId()
+      this.watermarkExtract.expected = expected
+      const baseUrl = process.env.VUE_APP_WATERMARK_API || "http://127.0.0.1:5001"
+      const url = `${baseUrl}/extract`
+      try {
+        const formData = new FormData()
+        formData.append("image", file)
+        formData.append("expected", expected)
+        const response = await fetch(url, {
+          method: "POST",
+          body: formData
+        })
+        if (!response.ok) {
+          throw new Error(`status=${response.status}`)
+        }
+        const data = await response.json()
+        this.watermarkExtract.decoded = data.decoded || ""
+        const cdr = Number(data.cdr)
+        const nc = Number(data.nc)
+        this.watermarkExtract.cdr = Number.isFinite(cdr) ? cdr.toFixed(4) : "-"
+        this.watermarkExtract.nc = Number.isFinite(nc) ? nc.toFixed(4) : "-"
+        if (data.decoded === expected) {
+          this.watermarkExtract.statusType = "success"
+          this.watermarkExtract.statusText = "\u89E3\u6790\u901A\u8FC7"
+        } else {
+          this.watermarkExtract.statusType = "warning"
+          this.watermarkExtract.statusText = "\u5339\u914D\u4E0D\u4E00\u81F4"
+        }
+      } catch (error) {
+        console.error("[Watermark] extract failed:", error)
+        this.watermarkExtract.statusType = "danger"
+        this.watermarkExtract.statusText = "\u89E3\u6790\u5931\u8D25"
+      } finally {
+        this.watermarkExtract.loading = false
       }
     },
     handleQuickAction(action) {
@@ -933,8 +992,9 @@ export default {
     }
   }
 
-  // 隐形水印&#x6821;&#x9A8C;
-  .watermark-check {
+  // &#x9690;&#x5F62;&#x6C34;&#x5370;&#x6821;&#x9A8C;
+  .watermark-check,
+  .watermark-extract {
     background: white;
     border-radius: 12px;
     padding: 24px;
@@ -974,6 +1034,37 @@ export default {
     }
   }
 
+  .watermark-rank {
+    margin-top: 12px;
+    border-top: 1px solid #f0f0f0;
+    padding-top: 12px;
+    font-size: 13px;
+  }
+
+  .watermark-rank .rank-header {
+    font-weight: 600;
+    color: #444;
+    margin-bottom: 8px;
+  }
+
+  .watermark-rank .rank-row {
+    display: flex;
+    gap: 12px;
+    padding: 4px 0;
+  }
+
+  .watermark-rank .rank-id {
+    min-width: 80px;
+    font-weight: 600;
+  }
+
+  .watermark-rank .rank-metric {
+    color: #666;
+  }
+
+  .watermark-rank .rank-empty {
+    color: #999;
+  }
   // 主要内容区域
   .main-content {
     .content-card {
@@ -1251,4 +1342,21 @@ export default {
   }
 }
 </style>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

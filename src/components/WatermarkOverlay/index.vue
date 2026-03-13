@@ -49,9 +49,9 @@ export default {
       }
       const cached = localStorage.getItem("wm_uid");
       if (cached) return cached;
-      const randomId = Array.from({ length: 18 }, () => Math.floor(Math.random() * 10)).join("");
-      localStorage.setItem("wm_uid", randomId);
-      return randomId;
+      const defaultId = "300315773374596921";
+      localStorage.setItem("wm_uid", defaultId);
+      return defaultId;
     },
     async fetchWatermark() {
       const baseUrl = process.env.VUE_APP_WATERMARK_API || "http://127.0.0.1:5001";
@@ -88,3 +88,4 @@ export default {
   opacity: 0.35;
 }
 </style>
+
