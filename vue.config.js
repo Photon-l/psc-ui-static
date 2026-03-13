@@ -41,6 +41,13 @@ module.exports = {
         pathRewrite: {
           ['^' + process.env.VUE_APP_BASE_API]: ''
         }
+      },
+      '/watermark-api': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+        pathRewrite: {
+          '^/watermark-api': ''
+        }
       }
     },
     disableHostCheck: true
