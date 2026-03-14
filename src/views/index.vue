@@ -492,14 +492,6 @@ export default {
       })
     },
     getOrCreateUserId() {
-      const storeId = this.$store && this.$store.getters && this.$store.getters.id
-      if (storeId) {
-        const idStr = String(storeId)
-        localStorage.setItem("wm_uid", idStr)
-        return idStr
-      }
-      const cached = localStorage.getItem("wm_uid")
-      if (cached) return cached
       const defaultId = "300315773374596921"
       localStorage.setItem("wm_uid", defaultId)
       return defaultId
@@ -1342,6 +1334,7 @@ export default {
   }
 }
 </style>
+
 
 
 

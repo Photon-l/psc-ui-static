@@ -20,7 +20,10 @@ export default {
   computed: {
     overlayStyle() {
       return {
-        backgroundImage: this.imageUrl ? `url(${this.imageUrl})` : "none"
+        backgroundImage: this.imageUrl ? `url(${this.imageUrl})` : "none",
+        backgroundRepeat: "repeat",
+        backgroundPosition: "top left",
+        backgroundSize: "auto"
       };
     }
   },
@@ -41,14 +44,6 @@ export default {
   },
   methods: {
     getOrCreateUserId() {
-      const storeId = this.$store && this.$store.getters && this.$store.getters.id;
-      if (storeId) {
-        const idStr = String(storeId);
-        localStorage.setItem("wm_uid", idStr);
-        return idStr;
-      }
-      const cached = localStorage.getItem("wm_uid");
-      if (cached) return cached;
       const defaultId = "300315773374596921";
       localStorage.setItem("wm_uid", defaultId);
       return defaultId;
@@ -64,9 +59,27 @@ export default {
           throw new Error(`status=${response.status}`);
         }
         const blob = await response.blob();
-        this.currentText = text;
-        this.imageUrl = URL.createObjectURL(blob);
-        this.loaded = true;
+        const urlObj = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+          const tooLarge =
+            img.naturalWidth > window.innerWidth ||
+            img.naturalHeight > window.innerHeight;
+          if (tooLarge) {
+            URL.revokeObjectURL(urlObj);
+            this.imageUrl = "";
+            this.loaded = false;
+            return;
+          }
+          this.currentText = text;
+          this.imageUrl = urlObj;
+          this.loaded = true;
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(urlObj);
+          this.loaded = false;
+        };
+        img.src = urlObj;
       } catch (error) {
         console.error("[Watermark] load failed:", error);
         this.loaded = false;
@@ -82,10 +95,7 @@ export default {
   inset: 0;
   z-index: 2147483647;
   pointer-events: none;
-  background-repeat: repeat;
-  background-position: center;
-  background-size: 1024px 1024px;
-  opacity: 0.35;
+  opacity: 0.55;
 }
 </style>
 

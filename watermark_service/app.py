@@ -1,4 +1,4 @@
-import cgi
+﻿import cgi
 import json
 import os
 import sys
@@ -19,18 +19,80 @@ except Exception:  # pragma: no cover - runtime environment dependent
 
 HOST = "127.0.0.1"
 PORT = 5001
-TEMPLATE_PATH = os.environ.get("WATERMARK_TEMPLATE", r"D:\woskspace\blind\template.png")
+TEMPLATE_PATH = os.environ.get("WATERMARK_TEMPLATE", r"D:\woskspace\pcs-ui\watermark_service\template.png")
 ALPHA_VALUE = int(os.environ.get("WATERMARK_ALPHA", "102"))
 PASSWORD_WM = int(os.environ.get("WATERMARK_PASSWORD_WM", "12345"))
 PASSWORD_IMG = int(os.environ.get("WATERMARK_PASSWORD_IMG", "54321"))
 MAX_PAYLOAD_BYTES = int(os.environ.get("WATERMARK_MAX_BYTES", "64"))
-USER_IDS_FILE = os.environ.get("WATERMARK_USER_IDS_FILE", r"D:\woskspace\blind\user_ids.txt")
+PILOT_LEN = int(os.environ.get("WATERMARK_PILOT_LEN", "64"))
+REPEAT_R = int(os.environ.get("WATERMARK_REPEAT_R", "3"))
+USER_IDS_FILE = os.environ.get("WATERMARK_USER_IDS_FILE", r"D:\woskspace\pcs-ui\watermark_service\user_ids.txt")
 USER_IDS_ENV = os.environ.get("WATERMARK_USER_IDS", "")
 WM_MAGIC = b"WM2"
 WM_HEADER_LEN = 5
 WM_TOTAL_BYTES = WM_HEADER_LEN + MAX_PAYLOAD_BYTES
 WM_TOTAL_BITS = WM_TOTAL_BYTES * 8
+EMBED_BITS_LEN = PILOT_LEN + (WM_TOTAL_BITS * REPEAT_R)
 _USER_IDS_CACHE = None
+_PARAMS_TUNED = False
+
+
+def _recompute_params():
+    global WM_TOTAL_BYTES, WM_TOTAL_BITS, EMBED_BITS_LEN
+    WM_TOTAL_BYTES = WM_HEADER_LEN + MAX_PAYLOAD_BYTES
+    WM_TOTAL_BITS = WM_TOTAL_BYTES * 8
+    EMBED_BITS_LEN = PILOT_LEN + (WM_TOTAL_BITS * REPEAT_R)
+
+
+def _can_embed_bits(bits_len: int) -> bool:
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_rgb_path = os.path.join(tmpdir, "base_rgb.png")
+            out_rgb_path = os.path.join(tmpdir, "wm_rgb.png")
+            base_img = Image.open(TEMPLATE_PATH).convert("RGB")
+            base_img.save(base_rgb_path)
+            bwm = WaterMark(password_wm=PASSWORD_WM, password_img=PASSWORD_IMG)
+            bwm.read_img(base_rgb_path)
+            bwm.read_wm([1] * bits_len, mode="bit")
+            bwm.embed(out_rgb_path)
+        return True
+    except Exception:
+        return False
+
+
+def _auto_tune_params():
+    global _PARAMS_TUNED, MAX_PAYLOAD_BYTES, PILOT_LEN, REPEAT_R
+    if _PARAMS_TUNED:
+        return
+    _PARAMS_TUNED = True
+
+    if not os.path.exists(TEMPLATE_PATH):
+        return
+
+    if _can_embed_bits(EMBED_BITS_LEN):
+        return
+
+    try:
+        ids = _load_user_ids()
+        max_uid_bytes = max((len(uid.encode("utf-8")) for uid in ids), default=1)
+    except Exception:
+        max_uid_bytes = 1
+
+    MAX_PAYLOAD_BYTES = max(1, max_uid_bytes)
+    PILOT_LEN = 16
+    REPEAT_R = 1
+    _recompute_params()
+
+    if not _can_embed_bits(EMBED_BITS_LEN):
+        raise RuntimeError(
+            "Template too small for watermark payload. Increase template size "
+            "or reduce WATERMARK_MAX_BYTES/WATERMARK_PILOT_LEN/WATERMARK_REPEAT_R."
+        )
+    print(
+        f"[watermark] auto-tune: MAX_PAYLOAD_BYTES={MAX_PAYLOAD_BYTES}, "
+        f"PILOT_LEN={PILOT_LEN}, REPEAT_R={REPEAT_R}",
+        flush=True
+    )
 
 
 def _build_payload(text: str) -> bytes:
@@ -78,6 +140,49 @@ def _decode_payload_from_bits(bits):
     if length > MAX_PAYLOAD_BYTES:
         raise ValueError("Invalid watermark length")
     return payload, length
+
+
+def _pilot_bits():
+    # Alternating 1/0 pilot for threshold estimation
+    return [(i % 2) == 0 for i in range(PILOT_LEN)]
+
+
+def _expand_bits_with_pilot_and_repeat(data_bits):
+    pilot = _pilot_bits()
+    repeated = []
+    for bit in data_bits:
+        repeated.extend([bit] * REPEAT_R)
+    return pilot + repeated
+
+
+def _decode_bits_from_values(values):
+    if len(values) < EMBED_BITS_LEN:
+        raise ValueError("Not enough extracted values")
+    pilot = _pilot_bits()
+    pilot_vals = values[:PILOT_LEN]
+    ones = [v for v, b in zip(pilot_vals, pilot) if b]
+    zeros = [v for v, b in zip(pilot_vals, pilot) if not b]
+    if not ones or not zeros:
+        thr = 0.5
+    else:
+        mu1 = sum(ones) / len(ones)
+        mu0 = sum(zeros) / len(zeros)
+        thr = (mu1 + mu0) / 2.0
+
+    data_vals = values[PILOT_LEN:PILOT_LEN + (WM_TOTAL_BITS * REPEAT_R)]
+    decoded = []
+    for i in range(WM_TOTAL_BITS):
+        chunk = data_vals[i * REPEAT_R:(i + 1) * REPEAT_R]
+        votes = sum(1 for v in chunk if v >= thr)
+        decoded.append(votes >= (REPEAT_R / 2))
+    return decoded
+
+
+def _legacy_bits_from_values(values):
+    if len(values) < WM_TOTAL_BITS:
+        raise ValueError("Not enough extracted values for legacy decode")
+    data_vals = values[:WM_TOTAL_BITS]
+    return [bool(1 if v >= 0.5 else 0) for v in data_vals]
 
 
 def _compute_metrics(expected_bits, decoded_bits):
@@ -136,6 +241,17 @@ def _rank_candidates(decoded_bits, top_k=5):
     return ranked[:top_k]
 
 
+def _anti_cut_pad(img: Image.Image, origin_w: int, origin_h: int, offset_x: int, offset_y: int):
+    if origin_w <= 0 or origin_h <= 0:
+        return img
+    if offset_x < 0 or offset_y < 0:
+        return img
+    canvas = Image.new("RGB", (origin_w, origin_h), color=(0, 0, 0))
+    crop_rgb = img.convert("RGB")
+    canvas.paste(crop_rgb, (offset_x, offset_y))
+    return canvas
+
+
 def _ensure_deps():
     if Image is None or np is None or WaterMark is None:
         raise RuntimeError("Missing deps. Install with: pip install -r requirements.txt")
@@ -145,9 +261,11 @@ def _embed_blind_watermark(text: str) -> Image.Image:
     _ensure_deps()
     if not os.path.exists(TEMPLATE_PATH):
         raise FileNotFoundError(f"Template not found: {TEMPLATE_PATH}")
+    _auto_tune_params()
 
     payload = _build_payload(text)
     wm_bits = _payload_to_bits(payload)
+    wm_bits = _expand_bits_with_pilot_and_repeat(wm_bits)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         base_rgb_path = os.path.join(tmpdir, "base_rgb.png")
@@ -175,12 +293,19 @@ def build_watermark_png(text: str) -> bytes:
 
 def _extract_bits_from_image(img: Image.Image):
     _ensure_deps()
+    _auto_tune_params()
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = os.path.join(tmpdir, "input.png")
         img.convert("RGB").save(tmp_path)
         bwm = WaterMark(password_wm=PASSWORD_WM, password_img=PASSWORD_IMG)
-        vals = bwm.extract(tmp_path, wm_shape=WM_TOTAL_BITS, mode="bit")
-        return [bool(1 if v >= 0.5 else 0) for v in vals]
+        vals = bwm.extract(tmp_path, wm_shape=EMBED_BITS_LEN, mode="bit")
+        try:
+            decoded_bits = _decode_bits_from_values(vals)
+            _decode_payload_from_bits(decoded_bits)
+            return decoded_bits
+        except Exception:
+            legacy_bits = _legacy_bits_from_values(vals)
+            return legacy_bits
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -272,7 +397,8 @@ class Handler(BaseHTTPRequestHandler):
                     headers=self.headers,
                     environ={
                         "REQUEST_METHOD": "POST",
-                        "CONTENT_TYPE": content_type
+                        "CONTENT_TYPE": content_type,
+                        "CONTENT_LENGTH": self.headers.get("Content-Length", "")
                     }
                 )
 
@@ -290,6 +416,12 @@ class Handler(BaseHTTPRequestHandler):
 
                 raw = file_item.file.read()
                 img = Image.open(BytesIO(raw))
+                origin_w = int(form.getfirst("origin_w", "0") or "0")
+                origin_h = int(form.getfirst("origin_h", "0") or "0")
+                offset_x = int(form.getfirst("offset_x", "0") or "0")
+                offset_y = int(form.getfirst("offset_y", "0") or "0")
+                if origin_w > 0 and origin_h > 0:
+                    img = _anti_cut_pad(img, origin_w, origin_h, offset_x, offset_y)
                 decoded_bits = _extract_bits_from_image(img)
 
                 decoded_text = ""
@@ -326,7 +458,8 @@ class Handler(BaseHTTPRequestHandler):
                     headers=self.headers,
                     environ={
                         "REQUEST_METHOD": "POST",
-                        "CONTENT_TYPE": content_type
+                        "CONTENT_TYPE": content_type,
+                        "CONTENT_LENGTH": self.headers.get("Content-Length", "")
                     }
                 )
 
@@ -346,6 +479,12 @@ class Handler(BaseHTTPRequestHandler):
 
                 expected = form.getfirst("expected", "").strip()
                 img = Image.open(BytesIO(raw))
+                origin_w = int(form.getfirst("origin_w", "0") or "0")
+                origin_h = int(form.getfirst("origin_h", "0") or "0")
+                offset_x = int(form.getfirst("offset_x", "0") or "0")
+                offset_y = int(form.getfirst("offset_y", "0") or "0")
+                if origin_w > 0 and origin_h > 0:
+                    img = _anti_cut_pad(img, origin_w, origin_h, offset_x, offset_y)
                 decoded_bits = _extract_bits_from_image(img)
                 payload, length = _decode_payload_from_bits(decoded_bits)
                 decoded_text = payload[WM_HEADER_LEN:WM_HEADER_LEN + length].decode("utf-8", errors="replace")
@@ -391,3 +530,4 @@ if __name__ == "__main__":
     print(f"Blind watermark: {blind_status}", flush=True)
     print(f"Watermark service started: http://{HOST}:{PORT}", flush=True)
     server.serve_forever()
+
